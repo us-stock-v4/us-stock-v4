@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>美股投資組合 v4 - 連動版</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>.up{color:#ef4444}.down{color:#22c55e}.skeleton{animation:pulse 1.5s infinite;background:#e2e8f0}</style>
+</head>
+<body class="bg-[#f8fafc] text-slate-800">
+<div class="max-w-6xl mx-auto p-4">
+<div class="flex justify-between items-center mb-4">
+<h1 class="text-xl font-bold">美股投資組合 v4 <span class="text-xs font-normal text-slate-500 ml-2">連動 /api/score.js • FINNHUB即時</span></h1>
+<div class="text-xs"><span id="status" class="bg-amber-100 text-amber-700 px-3 py-1 rounded-full">連線中...</span></div>
+</div>
+
+<div class="bg-gradient-to-br from-[#1e3a8a] to-[#2563eb] rounded-2xl p-5 text-white shadow-lg">
+<div class="flex justify-between items-center mb-4">
+<div class="font-bold">總覽 DASHBOARD <span class="text-xs opacity-80 ml-2" id="summaryText"></span></div>
+<div class="text-[10px] bg-white/20 px-3 py-1 rounded-full">上漲紅 • 下跌綠 (台股慣例) • 即時連動</div>
+</div>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3" id="summary"></div>
+</div>
+
+<div class="bg-white rounded-2xl shadow mt-6 p-5">
+<div class="flex justify-between items-center mb-4 flex-wrap gap-2">
+<h2 class="font-bold">標的池 (持倉預視・6檔已連動) <span class="bg-black text-white text-xs px-2 py-1 rounded-full ml-2" id="count">6 HOLDINGS</span></h2>
+<div class="text-xs text-slate-400">格式: 代碼,股數,買入單價,總金額,策略,停損,停利 • 資料來源: /api/score</div>
+</div>
+<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-8" id="preview"></div>
+<h3 class="text-xs text-slate-400 font-bold tracking-widest mb-3">詳細持倉 • DETAIL (目前價格 / 購買價格 / 股數 / 收益 / 評分)</h3>
+<div class="space-y-3" id="detail"></div>
+<h3 class="text-xs text-slate-400 font-bold tracking-widest mt-8 mb-3">分析原因 (來自 /api/score.js • 不納入選股邏輯)</h3>
+<div class="bg-slate-50 rounded-xl p-4 text-sm text-slate-600" id="analysis"></div>
+</div>
+<div class="text-center text-xs text-slate-400 mt-4">FINNHUB_API_KEY 需在 Vercel 環境變數設定 • 快取 5分鐘</div>
+</div>
+
+<script>
+const HOLDINGS_BASE = [
+  {code:'IOT', shares:117, buy:37.03, total:4332.51, strategy:'A財報怪獸', stop:35.18, target:42.58},
+  {code:'M', shares:188, buy:22.93, total:4310.84, strategy:'A財報怪獸', stop:21.78, target:26.37},
+  {code:'UAL', shares:39, buy:110.35, total:4303.65, strategy:'A財報怪獸', stop:104.83, target:126.90},
+  {code:'RDDT', shares:29, buy:147.74, total:4284.46, strategy:'A+B混合', stop:140.35, target:169.90},
+  {code:'INTU', shares:16, buy:265.62, total:4249.92, strategy:'B恐慌超賣', stop:244.37, target:318.74},
+  {code:'NVO', shares:113, buy:38.24, total:4321.12, strategy:'B恐慌超賣', stop:35.18, target:45.89},
+];
+
+let holdings = HOLDINGS_BASE.map(h=>({...h, live:null, chg:null, score:null, detail:null, analysis:'載入中...'}));
+
+function fmt(n){return n==null?'--':'$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
+function fmtP(n){return n==null?'--':(n>=0?'+':'')+n.toFixed(2)}
+function isUp(chg){return (chg||0)>=0}
+
+async function loadAll(){
+  document.getElementById('status').textContent='抓取 /api/score 中...';
+  document.getElementById('status').className='bg-amber-100 text-amber-700 px-3 py-1 rounded-full';
+  try{
+    const results = await Promise.all(holdings.map(async h=>{
+      try{
+        const r = await fetch(`/api/score?symbol=${h.code}`);
+        const data = await r.json();
+        if(data.error) throw new Error(data.error);
+        return {...h, live:data.price, chg:data.changePercent, score:data, detail:data.detail, analysis:data.analysis};
+      }catch(e){
+        console.error(h.code,e);
+        return {...h, live:h.buy, chg:0, analysis:'API錯誤: '+e.message+' (使用買入價)'};
+      }
+    }));
+    holdings = results;
+    document.getElementById('status').textContent='已連動 • '+new Date().toLocaleTimeString();
+    document.getElementById('status').className='bg-green-100 text-green-700 px-3 py-1 rounded-full';
+    render();
+  }catch(e){
+    document.getElementById('status').textContent='連線失敗';
+    document.getElementById('status').className='bg-red-100 text-red-700 px-3 py-1 rounded-full';
+  }
+}
+
+function render(){
+  const totalInvest = holdings.reduce((s,h)=>s+h.total,0);
+  const totalMarket = holdings.reduce((s,h)=>s+h.shares*(h.live||h.buy),0);
+  const totalProfit = totalMarket - totalInvest;
+  const dailyProfit = holdings.reduce((s,h)=>s+h.shares*(h.live||h.buy)*(h.chg||0)/100,0);
+  
+  document.getElementById('summaryText').textContent=`投入 ${fmt(totalInvest)} • 市值 ${fmt(totalMarket)} • 損益 ${fmtP(totalProfit)}`;
+  document.getElementById('summary').innerHTML=`
+  <div class="bg-white/10 border border-white/20 rounded-xl p-4"><div class="text-xs opacity-70">初始投入</div><div class="text-2xl font-bold mt-1">${fmt(totalInvest)}</div><div class="text-xs opacity-70 mt-1">6檔 • 平均 ${fmt(totalInvest/6)}/檔</div></div>
+  <div class="bg-white/10 border border-white/20 rounded-xl p-4"><div class="text-xs opacity-70">目前總市值 (即時)</div><div class="text-2xl font-bold mt-1">${fmt(totalMarket)}</div><div class="text-xs mt-1"><span class="bg-red-500 text-white px-1 rounded">▲</span> vs 投入 ${fmtP(totalProfit)}</div></div>
+  <div class="bg-white rounded-xl p-4 text-slate-800"><div class="text-xs text-slate-500">總損益</div><div class="text-2xl font-bold mt-1 ${totalProfit>=0?'up':'down'}">${fmtP(totalProfit)}</div><div class="text-xs mt-1"><span class="bg-red-50 text-red-500 px-2 py-0.5 rounded">↗ ${ (totalProfit/totalInvest*100).toFixed(2)}%</span></div></div>
+  <div class="bg-white rounded-xl p-4 text-slate-800"><div class="text-xs text-slate-500">當日損益 (連動)</div><div class="text-2xl font-bold mt-1 ${dailyProfit>=0?'up':'down'}">${fmtP(dailyProfit)}</div><div class="text-xs mt-1"><span class="bg-red-50 text-red-500 px-2 py-0.5 rounded">↗ ${ (dailyProfit/totalMarket*100).toFixed(2)}% 今日</span></div></div>
+  `;
+
+  document.getElementById('preview').innerHTML = holdings.map(h=>`
+  <div class="border rounded-xl p-3 bg-white">
+  <div class="flex justify-between items-center"><span class="font-bold">${h.code}</span><span class="text-xs px-2 py-0.5 rounded ${isUp(h.chg)?'bg-red-50 up':'bg-green-50 down'}">${fmtP(h.chg)}%</span></div>
+  <div class="mt-2 text-sm">${h.shares}股 <span class="${isUp(h.chg)?'up':'down'} font-bold">${fmt(h.live)}</span></div>
+  <div class="mt-1 text-[10px] text-slate-400">評分 ${h.score?h.score.total:'--'}</div>
+  </div>`).join('');
+
+  document.getElementById('detail').innerHTML = holdings.map(h=>{
+    const profit = ((h.live||h.buy)-h.buy)*h.shares;
+    const up = isUp(h.chg);
+    return `<div class="border rounded-xl p-4">
+    <div class="flex flex-wrap justify-between items-start gap-2">
+    <div><span class="bg-black text-white w-7 h-7 inline-flex items-center justify-center rounded-full text-xs mr-2">${h.code[0]}</span><span class="font-bold">${h.code}</span> <span class="${up?'up':'down'} font-bold ml-2">${fmt(h.live)} ${fmtP(h.chg)}%</span> <span class="text-xs bg-slate-100 px-2 py-0.5 rounded ml-2">總分 ${h.score?h.score.total:'--'}</span></div>
+    <div class="font-bold ${profit>=0?'up':'down'}">${fmtP(profit)}</div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3 text-sm">
+    <div>購買價格 <span class="font-bold">${fmt(h.buy)}</span></div>
+    <div>股數 <span class="font-bold">${h.shares}股</span></div>
+    <div>總金額 <span class="font-bold">${fmt(h.total)}</span></div>
+    <div>這支收益 <span class="font-bold ${profit>=0?'up':'down'}">${fmtP(profit)}</span></div>
+    </div>
+    <div class="flex gap-2 mt-3 text-xs flex-wrap">
+    <span class="bg-orange-100 text-orange-700 px-2 py-1 rounded">${h.strategy}</span>
+    <span>停損 ${fmt(h.stop)}</span>
+    <span>停利 ${fmt(h.target)}</span>
+    <span class="bg-blue-50 text-blue-700 px-2 py-1 rounded">營收${h.score?h.score.scores.rev:'--'} / EPS${h.score?h.score.scores.eps:'--'} / 未反映${h.score?h.score.scores.unp:'--'} / 技術${h.score?h.score.scores.tec:'--'}</span>
+    </div>
+    <div class="mt-2 text-xs text-slate-500">分析原因(來自API, 不納入選股): ${h.analysis} | EPS超預期 ${h.detail?.epsSurprise??'--'}% | 營收年增 ${h.detail?.revSurprise??'--'}% | RSI ${h.detail?.rsi??'--'}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('analysis').innerHTML = holdings.map(h=>`• <b>${h.code}</b> [${h.strategy}] ${h.analysis} - 現價${fmt(h.live)} / 評分${h.score?h.score.total:'--'} (營收${h.score?h.score.scores.rev:'--'}+EPS${h.score?h.score.scores.eps:'--'}+未反映${h.score?h.score.scores.unp:'--'}+技術${h.score?h.score.scores.tec:'--'})`).join('<br>');
+}
+
+loadAll();
+setInterval(loadAll, 5*60*1000);
+</script>
+</body>
+</html>
